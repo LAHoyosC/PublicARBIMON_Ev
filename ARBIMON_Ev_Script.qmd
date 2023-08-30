@@ -1,0 +1,389 @@
+---
+title: "ARBIMON Evaluation"
+author: ""
+format: 
+  html:
+    self-contained: true
+editor: visual
+---
+
+## What's ARBIMON?
+
+Overall, ARBIMON (https://arbimon.rfcx.org/) is an initiative that provides analyzing tools for acoustic data, being passive-acoustic data its main analysis focus.
+
+The platform was recently turned into open source after several years being a paid service. This has given the opportunity to be used and explored by diverse researchers that focus on many different groups. However, understanding how these algorithms are behaving is a must if we want to draw ecological conclusions from the data they generate.
+
+Here, I aim to evaluate the performance of one of the detection algorithms that ARBIMON provides that is known as "template matching", these algorithms involve comparing a target acoustic signal with a reference template in order to identify a match or a similar signal.
+
+## Proces:
+
+1.  Load required packages
+
+```{r, message=F}
+#Packages
+library(tidyverse)
+library(caret)
+library(plotly)
+library(gridExtra)
+library(patchwork)
+library(car)
+
+```
+
+2.  Load and arrange initial databases.
+
+```{r}
+#Data
+experto = read.csv("Data/EXPERTO_Itgo4_T2.csv", sep = ";")
+Pulsatrix = read.csv("Data/T2_Itgo4_tho0.2_Pulsatrix_Ev.csv", sep = ";")
+Nyctidromus = read.csv("Data/T2_Itgo_th0.2_Bujio_EV.csv", sep = ";")
+
+#Change colname of experto so I can merge tables later on
+colnames(experto)[1] = colnames(Pulsatrix)[1]
+colnames(Pulsatrix)[2] = "score_Pulsatrix"
+colnames(Nyctidromus)[2] = "score_Nyctidromus"
+
+#Let's merge the data  for the overall evaluation.
+
+eval = full_join(experto, Pulsatrix, by = "recording")
+eval = full_join(eval, Nyctidromus, by = "recording")
+
+#I will now transform each one of the scores into 1-0 
+
+eval[which(is.na(eval$score_Pulsatrix)),4] = as.integer(0)
+eval[which(is.na(eval$score_Nyctidromus)),5] = as.integer(0)
+
+
+eval$Puls = ifelse(eval$score_Pulsatrix > 0, 1, 0)
+
+eval[720,5]= 0
+eval$Nyc = ifelse(eval$score_Nyctidromus > 0, 1, 0)
+
+
+```
+
+## Confusion matrix
+
+With the information gathered and arranged by table "eval" we can now continue to the execution of the confusion matrix. This is a *naive* estimator, as it's considering each one of the registers found by ARBIMON with it's template matching tool, without accounting the score information that is always provided.
+
+```{r}
+
+mc_pulsatrix = caret::confusionMatrix(data = as.factor(eval$Puls), 
+                    reference = as.factor(eval$Experto_Pulsatrix),
+                    positive = "1")
+
+mc_nyctidromus = caret::confusionMatrix(data = as.factor(eval$Nyc),
+                        reference = as.factor(eval$Experto_Nyctidromus),
+                        positive = "1")
+
+```
+
+We now proceed to make a loop to calculate each one of the sensitivities and specificities for the obtained scores through ARBIMON.
+
+We'll do species by species.
+
+### *Pulsatrix perspicillata*:
+
+```{r}
+dt_pulsatrix <- NULL #To save each one of the results.
+
+for (i in eval$score_Pulsatrix){
+        eval$Puls <- ifelse(eval$score_Pulsatrix > i, 1, 0)
+        cm <- confusionMatrix(data = factor(eval$Puls, 
+                                            levels = c("1","0")), 
+                              reference = factor(eval$Experto_Pulsatrix, 
+                                                 levels = c("1","0")),
+                              positive = "1")
+        x <- c(i, cm[[4]][1], cm[[4]][2])
+       dt_pulsatrix <- rbind(x, dt_pulsatrix)
+}
+
+#We transform the result to be a table and we change the header of the first column.
+dt_pulsatrix = as.data.frame(dt_pulsatrix)
+colnames(dt_pulsatrix)[1] = "Score"
+
+#Before running into the graph, let's find the values at which both Sensitivity and specificity are maximized.
+
+dif_puls <- abs(dt_pulsatrix[,2]-dt_pulsatrix[,3])
+max_puls = dt_pulsatrix[which.min(rev(dif_puls)), 1] #Score at wich both specificity and sensitivity are maximized
+
+
+##### Graphing ######
+#Since the loop was done with each one of the scores (even tho there were some repeated ones), we will now organize the scores and make them unique.
+
+dt_puls = unique(dt_pulsatrix)
+dt_puls = dt_puls[order(dt_puls$Score),]
+dt_puls = dt_puls[-1,]
+
+#I'll reshape the data from a wide to a long format to ease the ggplot process.
+melted_dt_Puls = reshape2::melt(dt_puls, id.vars=c("Score")) #melting
+colnames(melted_dt_Puls)[2] = "Criterion" #re-name the column to keep this name on the graph.
+
+
+#Lets make the graph!
+
+#titulo = expression(paste("ARBIMON performance: ",  italic("Pulsatrix perspicillata"))) #Title with italic for the scientific name.
+
+titulo = expression(italic("Pulsatrix perspicillata"))
+
+#ggplot:
+ pul = ggplot(data = melted_dt_Puls,
+       aes (x = Score, y = value, color = Criterion )) +
+  geom_line() + 
+  #geom_vline(xintercept = max_puls, linetype="dotted", 
+                #color = "blue", linewidth = 0.5) +
+  labs(x = "Score", y = "", title = titulo) +
+  scale_x_continuous(breaks=round(c(0.2, max_puls, 0.3, 0.4, 0.5),3))+
+     theme(plot.title = element_text(hjust = 0.5, size = 20),
+              axis.title = element_text(size = 15),
+              axis.text.x = element_text(size = 15),
+              axis.text.y = element_text(size = 15),
+              legend.text = element_text(size = 15),
+              legend.title = element_text(size = 15))
+ 
+ggsave("Arbimon_performance_P.perspicillata.png", width = 6, height = 4, dpi = 300, )
+  
+```
+
+### *Nyctidromus albicollis*
+
+```{r}
+dt_nyctidromus <- NULL #To save each one of the results.
+
+for (i in eval$score_Nyctidromus){
+        eval$Nyct <- ifelse(eval$score_Nyctidromus > i, 1, 0)
+        cm <- confusionMatrix(data = factor(eval$Nyct, 
+                                            levels = c("1","0")), 
+                              reference = factor(eval$Experto_Nyctidromus, 
+                                                 levels = c("1","0")),
+                              positive = "1")
+        x <- c(i, cm[[4]][1], cm[[4]][2])
+        dt_nyctidromus <- rbind(x, dt_nyctidromus)
+}
+
+#We transform the result to be a table and we change the header of the first column.
+dt_nyctidromus = as.data.frame(dt_nyctidromus)
+colnames(dt_nyctidromus)[1] = "Score"
+
+#Before running into the graph, let's find the values at which both Sensitivity and specificity are maximized.
+
+dif_nyct <- abs(dt_nyctidromus[,2]-dt_nyctidromus[,3])
+max_nyct = dt_nyctidromus[which.min(rev(dif_nyct)), 1] #Score at wich both specificity and sensitivity are maximized
+
+
+##### Graphing ######
+#Since the loop was done with each one of the scores (even tho there were some repeated ones), we will now organize the scores and make them unique.
+
+dt_nyct = unique(dt_nyctidromus)
+dt_nyct = dt_nyct[order(dt_nyct$Score),]
+dt_nyct = dt_nyct[-1,]
+
+#I'll reshape the data from a wide to a long format to ease the ggplot process.
+melted_dt_Nyct = reshape2::melt(dt_nyct, id.vars=c("Score")) #melting
+colnames(melted_dt_Nyct)[2] = "Criterion" #re-name the column to keep this name on the graph.
+
+
+#Lets make the graph!
+
+titulo = expression(paste(italic("Nyctidromus albicollis"))) #Title with italic for the scientific name.
+
+#ggplot:
+Nyc = ggplot(data = melted_dt_Nyct,
+       aes (x = Score, y = value, color = Criterion )) +
+        geom_line() + 
+        #geom_vline(xintercept = max_nyct, linetype="dotted", 
+         #          color = "blue", linewidth = 0.5) +
+        labs(x = "Score", y = "", title = titulo) +
+        scale_x_continuous(breaks=round(c(0.2, max_nyct, 0.3, 0.4, 0.5),3))+
+        theme(plot.title = element_text(hjust = 0.5, size = 20),
+              axis.title = element_text(size = 15),
+              axis.text.x = element_text(size = 15),
+              axis.text.y = element_text(size = 15),
+              legend.position = "none")
+
+ggsave("Arbimon_performance_Nyctidromus.png", width = 6, height = 4, dpi = 300, )
+```
+
+Interactive graphs will be helpful to better understand the data, therefore, below we provide a script to make interactive graphs and save them as html documents.
+
+#### Interactive graphs:
+
+```{r}
+
+#ggplotly does not allow expresions into the title, so we need to change the title to make it interactive.
+
+figure = ggplot(data = melted_dt_Puls,
+       aes (x = Score, y = value, color = Criterion )) +
+  geom_line() + 
+  geom_vline(xintercept = max_puls, linetype="dotted", 
+                color = "blue", linewidth = 0.5) +
+  labs(x = "Score", y = "", title = "Arbimon performance: P.perspicillata") +
+  scale_x_continuous(breaks=round(c(0.2, max_puls, 0.3, 0.4, 0.5),3))+
+    theme(plot.title = element_text(hjust = 0.5, size = 14),
+        axis.title = element_text(size = 15),
+        axis.text.x = element_text(size = 8),
+        axis.text.y = element_text(size = 8))
+
+interactive = ggplotly(figure)
+
+
+htmlwidgets::saveWidget(interactive, "Performance_Pulsatrix.html")
+
+interactive
+
+#We get a sensitivity of 0.86 and a specificity of also 0.86 for Pulsatrix perspicillata
+
+#Nyctidromus:
+
+nycti = ggplot(data = melted_dt_Nyct,
+       aes (x = Score, y = value, color = Criterion )) +
+        geom_line() + 
+        #geom_vline(xintercept = max_nyct, linetype="dotted", 
+                   #color = "blue", linewidth = 0.5) +
+        labs(x = "Score", y = "", title = "ARBIMON performance: Nyctidromus albicollis") +
+        scale_x_continuous(breaks=round(c(0.2, max_nyct, 0.3, 0.4, 0.5),3))+
+        theme(plot.title = element_text(hjust = 0.5, size = 14),
+              axis.title = element_text(size = 15),
+              axis.text.x = element_text(size = 8),
+              axis.text.y = element_text(size = 8))
+
+p = ggplotly(nycti)
+
+htmlwidgets::saveWidget(p, "Performance_Nyctidromus.html")
+
+p
+
+##Equilibrium for Nyctidromus can be found at a sensitivity of 0.56 and a specificity of 0.55 which is quite lower than 
+```
+
+#### Side to side ggplot graphs
+
+```{r}
+
+#Nyctidromus
+
+tituloN = expression(paste(italic("Nyctidromus albicollis"))) #Title with italic for the scientific name.
+
+#ggplot:
+Nyc = ggplot(data = melted_dt_Nyct,
+       aes (x = Score, y = value, linetype = Criterion )) +
+        geom_line() + 
+        #geom_vline(xintercept = max_nyct, linetype="dotted", 
+         #          color = "blue", linewidth = 0.5) +
+        labs(x = "Score", y = "", title = tituloN) +
+        scale_x_continuous(breaks=round(c(0.2,0.25, 0.3, 0.35),2))+
+        theme(plot.title = element_text(hjust = 0.5, size = 20),
+              axis.title = element_text(size = 15),
+              axis.text.x = element_text(size = 12),
+              axis.text.y = element_text(size = 12),
+              legend.text = element_text(size = 12),
+              legend.title = element_text(size = 12),
+              legend.position = "none")
+#Pulsatrix
+tituloP = expression(italic("Pulsatrix perspicillata"))
+
+#ggplot:
+ pul = ggplot(data = melted_dt_Puls,
+       aes (x = Score, y = value, linetype = Criterion )) +
+  geom_line() + 
+  #geom_vline(xintercept = max_puls, linetype="dotted", 
+                #color = "blue", linewidth = 0.5) +
+  labs(x = "Score", y = "", title = tituloP) +
+  scale_x_continuous(breaks=round(c(0.2, 0.3, 0.4, 0.5),2))+
+     theme(plot.title = element_text(hjust = 0.5, size = 20),
+              axis.title = element_text(size = 15),
+              axis.text.x = element_text(size = 12),
+              axis.text.y = element_text(size = 12),
+              legend.text = element_text(size = 12),
+              legend.title = element_text(size = 12),
+              legend.position = "none")
+
+ 
+#patchwork
+
+
+# ggp_all = Nyc + pul +
+#  (plot_layout(guides = "collect")  &
+#  theme(legend.position = 'bottom')) +
+#  plot_annotation(title = "ARBIMON performance") &
+#  theme(plot.title = element_text(hjust = 0.5, size = 20))
+# ggp_all
+
+
+#ggsave("ARBIMON_performance_both.png", width = 12, height = 5, dpi = 600)
+
+#GridExtra
+
+#extract_legend <- function(my_ggp) {
+#  step1 <- ggplot_gtable(ggplot_build(my_ggp))
+#  step2 <- which(sapply(step1$grobs, function(x) x$name) == "guide-box")
+#  step3 <- step1$grobs[[step2]]
+#  return(step3)
+#}
+
+# Apply user-defined function to extract legend
+#shared_legend <- extract_legend(pul)
+
+#Graph
+
+#png("ARBIMON_performance_both.png", width = 480, height = 480, pointsize = 12, res = 300 )
+
+h = grid.arrange(arrangeGrob(Nyc, pul, ncol = 2),
+             shared_legend, nrow = 2, heights = c(10, 1), top = textGrob("ARBIMON performance",gp = gpar(fontsize=20,font=1)))
+
+ggsave("ARBIMON_performance_both.png", h, width = 10, height = 6 , dpi = 350)
+
+
+#h = arrangeGrob(Nyc, pul, ncol = 2, shared_legend, nrow = 2, heights = c(10, 1), top = textGrob("ARBIMON performance",gp = gpar(fontsize=20,font=1)))
+
+
+
+```
+
+### Individuality analysis:
+
+```{r}
+dt <- read.csv2("Data/measurements_V2_26.04.2023_PPnNA.csv")
+
+names(dt)[names(dt) == 'Specie'] <- 'Species'
+dt$Species = as.factor(dt$Species)
+
+#x11()
+ggplot(dt, aes(x = Type_Freq_.Hz., y = Freq_.Hz., fill = Species))+
+  geom_boxplot(aes()) + xlab("Feature") + ylab("Frequency (Hz)") +
+  labs(title = "Frequencies comparison") +
+  scale_fill_manual(values = c("#777B7E", "#FFFFFF"),
+                    labels = c("N. albicollis", "P. perspicillata"))+
+  theme(plot.title = element_text(hjust = 0.5, size = 14),
+        axis.title = element_text(size = 15),
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        panel.background = element_blank())
+
+
+#ggsave("Frequencies_comparaison.png", width = 6, height = 4, dpi = 300, )
+```
+
+We were aiming to evaluate the dispersion of different spectral features to check how dispersed they were as a signal of individuality.
+
+To do so, we plotted the features and we also conducted a levene test to compare the disperssion of the features of both species.
+
+#### Levene Test
+
+```{r}
+
+dt <- read.csv2("muestra.csv")
+dt$Especie <- as.factor(dt$Especie)
+
+# H0 = Variances are equal among the two species
+# H1 = Variances differ
+
+# Significance: 0.05
+# We reject H0 if the p-values of the tests are less than the significance value.
+
+leveneTest(dt$Low ~ dt$Especie, center = "mean") 
+leveneTest(dt$High ~ dt$Especie, center = "mean")
+leveneTest(dt$Peack ~ dt$Especie, center = "mean")
+
+
+```
