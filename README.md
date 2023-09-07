@@ -7,7 +7,8 @@ This is the repository created for the evaluation of the template matching algor
 
 *EXPERTO_Itgo4_T2*: This document has the manual annotations done by the team. 
 This was the data used to compare to the matches obtained by thepattern-matching algorithm. 
-It has 3 columns: 
+It has 3 columns:
+
 	*filename: 		Name of each audio file.
 	*Experto_Pulsatrix:	This column has the manual annotations for P. perspicillata.
 			  	1 when the species was registered at least once on that recording.
